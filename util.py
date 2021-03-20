@@ -349,7 +349,6 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
 
-# this function construct an additive pot quantization levels set, with clipping threshold = 1,
 def build_power_value(B=2, additive=True):
     base_a = [0.]
     base_b = [0.]
@@ -451,7 +450,7 @@ class weight_quantize_fn(nn.Module):
         self.weight_q = weight_quantization(b=self.w_bit, grids=self.grids, power=self.power)
         self.register_parameter('wgt_alpha', Parameter(torch.tensor(3.0)))
 
-    def forward(self, weight, mask = None):
+    def forward(self, weight, mask = True):
         if self.w_bit == 32:
             weight_q = weight
         else:
@@ -465,7 +464,7 @@ class weight_quantize_fn(nn.Module):
 
             #mean = weight.data.mean()
             #std = weight.data.std()
-            if(mask!=None):
+            if(mask != True):
                 weight = weight.add(-mean).div(std) * mask      # weights normalization
             else:
                 weight = weight.add(-mean).div(std)
@@ -549,7 +548,6 @@ class first_conv(nn.Conv2d):
         max = self.weight.data.max()
         weight_q = self.weight.div(max).mul(127).round().div(127).mul(max)
         weight_q = (weight_q-self.weight).detach()+self.weight
-        print(weight_q)
         return F.conv2d(x, weight_q, self.bias, self.stride,
                         self.padding, self.dilation, self.groups)
 

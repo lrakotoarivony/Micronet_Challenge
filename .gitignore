@@ -1,5 +1,8 @@
 .ipynb_checkpoints
+<<<<<<< HEAD
 __pycache__
+=======
+>>>>>>> f0417674f165eb5bca492c7d44b09ab347ba4375
 data/
 /data
 data

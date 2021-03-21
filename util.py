@@ -561,3 +561,146 @@ class last_fc(nn.Linear):
         weight_q = self.weight.div(max).mul(127).round().div(127).mul(max)
         weight_q = (weight_q-self.weight).detach()+self.weight
         return F.linear(x, weight_q, self.bias)
+
+def count_conv2d(m, x, y):
+    x = x[0] # remove tuple
+
+    fin = m.in_channels
+    fout = m.out_channels
+    sh, sw = m.kernel_size
+
+    # ops per output element
+    kernel_mul = sh * sw * fin
+    kernel_add = sh * sw * fin - 1
+    bias_ops = 1 if m.bias is not None else 0
+    kernel_mul = kernel_mul/8 # FP4
+    ops = kernel_mul + kernel_add + bias_ops
+
+    # total ops
+    num_out_elements = y.numel()
+    total_ops = num_out_elements * ops
+    
+    # total params 
+    
+
+    #print("Conv2d: S_c={}, F_in={}, F_out={}, P={}, params={}, operations={}".format(sh,fin,fout,x.size()[2:].numel(),int(m.total_params.item()),int(total_ops)))
+    # incase same conv is used multiple times
+    m.total_ops += torch.Tensor([int(total_ops)])
+
+
+def count_bn2d(m, x, y):
+    x = x[0] # remove tuple
+
+    nelements = x.numel()
+    total_sub = 2*nelements
+    total_div = nelements
+    total_ops = total_sub + total_div
+
+    m.total_ops += torch.Tensor([int(total_ops)])
+    #print("Batch norm: F_in={} P={}, params={}, operations={}".format(x.size(1),x.size()[2:].numel(),int(m.total_params.item()),int(total_ops)))
+
+
+def count_relu(m, x, y):
+    x = x[0]
+
+    nelements = x.numel()
+    total_ops = nelements
+
+    m.total_ops += torch.Tensor([int(total_ops)])
+    #print("ReLU: F_in={} P={}, params={}, operations={}".format(x.size(1),x.size()[2:].numel(),0,int(total_ops)))
+
+
+
+def count_avgpool(m, x, y):
+    x = x[0]
+    total_add = torch.prod(torch.Tensor([m.kernel_size])) - 1
+    total_div = 1
+    kernel_ops = total_add + total_div
+    num_elements = y.numel()
+    total_ops = kernel_ops * num_elements
+
+    m.total_ops += torch.Tensor([int(total_ops)])
+    #print("AvgPool: S={}, F_in={}, P={}, params={}, operations={}".format(m.kernel_size,x.size(1),x.size()[2:].numel(),0,int(total_ops)))
+
+def count_linear(m, x, y):
+    # per output element
+    total_mul = m.in_features/2
+    total_add = m.in_features - 1
+    num_elements = y.numel()
+    total_ops = (total_mul + total_add) * num_elements
+    #print("Linear: F_in={}, F_out={}, params={}, operations={}".format(m.in_features,m.out_features,int(m.total_params.item()),int(total_ops)))
+    m.total_ops += torch.Tensor([int(total_ops)])
+
+def count_sequential(m, x, y):
+    inutile = True
+    #print ("Sequential: No additional parameters  / op")
+
+# custom ops could be used to pass variable customized ratios for quantization
+def profile(model, input_size, custom_ops = {}):
+    model.eval()
+
+    def add_hooks(m):
+        if len(list(m.children())) > 0: return
+        m.register_buffer('total_ops', torch.zeros(1))
+        m.register_buffer('total_params', torch.zeros(1))
+
+
+
+
+        if isinstance(m, nn.Conv2d):
+            m.register_forward_hook(count_conv2d)
+        elif isinstance(m, nn.BatchNorm2d):
+            m.register_forward_hook(count_bn2d)
+        elif isinstance(m, nn.ReLU):
+            m.register_forward_hook(count_relu)
+        elif isinstance(m, (nn.AvgPool2d)):
+            m.register_forward_hook(count_avgpool)
+        elif isinstance(m, nn.Linear):
+            m.register_forward_hook(count_linear)
+        elif isinstance(m, nn.Sequential):
+            m.register_forward_hook(count_sequential)
+        else:
+            print("Not implemented for ", m)
+
+    model.apply(add_hooks)
+
+    x = torch.zeros(input_size)
+    model(x)
+
+    total_ops = 0
+    total_params = 0
+    for m in model.modules():
+        if len(list(m.children())) > 0: continue
+        total_ops += m.total_ops
+        total_params += m.total_params
+
+    return total_ops, total_params
+
+def score(model , filename, pruning = False, quantization = False):
+    ref_params = 5586981
+    ref_flops  = 834362880
+    if(pruning):
+        criterion = nn.CrossEntropyLoss()
+        parameters_to_prune=[]
+        for name, module in model.named_modules():
+            if isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.Linear) :
+                parameters_to_prune.append((module,'weight'))
+        prune.global_unstructured(parameters_to_prune, pruning_method=prune.L1Unstructured, amount=0.2)
+        loaded_cpt=torch.load(filename)
+        model.load_state_dict(loaded_cpt)
+        evaluation(model, testloader, criterion)
+        
+    flops, _ = profile(model, (1,3,32,32))
+    flops = flops.item()
+    
+    params = 0
+    if(quantization):
+        for name, para in model.named_parameters():
+            if "conv" in name and name.startswith("conv") == False:
+                params+= para.nonzero().size(0)/8
+            else:
+                params+= para.nonzero().size(0)/2
+    else:
+        for name, para in model.named_parameters():
+            params+= para.nonzero().size(0)/2
+    return flops/ref_flops , params/ref_params

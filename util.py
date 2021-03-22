@@ -450,7 +450,7 @@ class weight_quantize_fn(nn.Module):
         self.weight_q = weight_quantization(b=self.w_bit, grids=self.grids, power=self.power)
         self.register_parameter('wgt_alpha', Parameter(torch.tensor(3.0)))
 
-    def forward(self, weight, mask = True):
+    def forward(self, weight, mask = torch.zeros(1), mask_flag = False):
         if self.w_bit == 32:
             weight_q = weight
         else:
@@ -464,7 +464,7 @@ class weight_quantize_fn(nn.Module):
 
             #mean = weight.data.mean()
             #std = weight.data.std()
-            if(mask != True):
+            if(mask_flag):
                 weight = weight.add(-mean).div(std) * mask      # weights normalization
             else:
                 weight = weight.add(-mean).div(std)
@@ -525,7 +525,7 @@ class QuantConv2d(nn.Conv2d):
 
     def forward(self, x):
         if hasattr(self, 'weight_mask'):
-            weight_q = self.weight_quant(self.weight, self.weight_mask)
+            weight_q = self.weight_quant(self.weight, self.weight_mask, True)
         else :
             weight_q = self.weight_quant(self.weight)
         x = self.act_alq(x, self.act_alpha)
@@ -635,6 +635,9 @@ def count_sequential(m, x, y):
     inutile = True
     #print ("Sequential: No additional parameters  / op")
 
+def remove_hook(m, x, y):
+    m.total_ops = torch.zeros(1)
+
 # custom ops could be used to pass variable customized ratios for quantization
 def profile(model, input_size, custom_ops = {}):
     model.eval()
@@ -643,9 +646,6 @@ def profile(model, input_size, custom_ops = {}):
         if len(list(m.children())) > 0: return
         m.register_buffer('total_ops', torch.zeros(1))
         m.register_buffer('total_params', torch.zeros(1))
-
-
-
 
         if isinstance(m, nn.Conv2d):
             m.register_forward_hook(count_conv2d)
@@ -659,9 +659,16 @@ def profile(model, input_size, custom_ops = {}):
             m.register_forward_hook(count_linear)
         elif isinstance(m, nn.Sequential):
             m.register_forward_hook(count_sequential)
+        
         else:
             print("Not implemented for ", m)
 
+    def remove_hooks(m):
+        if len(list(m.children())) > 0: return
+        if isinstance(m, nn.Conv2d) or isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.ReLU) or isinstance(m, (nn.AvgPool2d)) or isinstance(m, nn.Linear) or isinstance(m, nn.Sequential):
+            m.register_forward_hook(remove_hook)
+
+    model.apply(remove_hooks)
     model.apply(add_hooks)
 
     x = torch.zeros(input_size)
@@ -676,10 +683,10 @@ def profile(model, input_size, custom_ops = {}):
 
     return total_ops, total_params
 
-def score(model , filename, pruning = False, quantization = False):
+def score(model , quantization = False):
     ref_params = 5586981
     ref_flops  = 834362880
-    if(pruning):
+    '''if(pruning):
         criterion = nn.CrossEntropyLoss()
         parameters_to_prune=[]
         for name, module in model.named_modules():
@@ -689,7 +696,7 @@ def score(model , filename, pruning = False, quantization = False):
         loaded_cpt=torch.load(filename)
         model.load_state_dict(loaded_cpt)
         evaluation(model, testloader, criterion)
-        
+    '''   
     flops, _ = profile(model, (1,3,32,32))
     flops = flops.item()
     
@@ -697,10 +704,11 @@ def score(model , filename, pruning = False, quantization = False):
     if(quantization):
         for name, para in model.named_parameters():
             if "conv" in name and name.startswith("conv") == False:
-                params+= para.nonzero().size(0)/8
+                params += torch.sum(abs(para) >= 1e-20).item()/8
+                #params+= para.nonzero().size(0)/8
             else:
-                params+= para.nonzero().size(0)/2
+                params += torch.sum(abs(para) >= 1e-20).item()/2
     else:
         for name, para in model.named_parameters():
-            params+= para.nonzero().size(0)/2
+            params += torch.sum(abs(para) >= 1e-20).item()/2
     return flops/ref_flops , params/ref_params

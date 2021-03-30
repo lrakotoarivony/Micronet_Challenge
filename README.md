@@ -8,3 +8,4 @@ https://github.com/brain-bzh/ai-optim
 https://micronet-challenge.github.io/  
 https://iclr.cc/virtual_2020/poster_BkgXT24tDS.html  
 https://github.com/eghouti/BinaryConnect
+https://iclr.cc/virtual_2020/poster_S1gSj0NKvB.html

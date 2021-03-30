@@ -182,7 +182,7 @@ def DenseNet161():
     return DenseNet(Bottleneck, [6,12,36,24], growth_rate=48)
 
 def densenet_cifar():
-    return DenseNet(Bottleneck, [6,12,24,16], growth_rate=12)
+    return DenseNet(Bottleneck, [6,10,20,12], growth_rate=8)
 
 def densenet_cifar_quant():
-    return DenseNet_Quant(Bottleneck_Quant, [6,12,24,16], growth_rate=12)
+    return DenseNet_Quant(Bottleneck_Quant, [6,10,20,12], growth_rate=8)

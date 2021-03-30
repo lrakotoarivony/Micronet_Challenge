@@ -83,6 +83,43 @@ def training(train_loader, valid_loader, model, criterion, optimizer,n_epochs,sc
 
     return train_losses, valid_losses,  train_acc, valid_acc
 
+def training_pruning(train_loader, model, criterion, optimizer,n_epochs,scheduler):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    train_losses, train_acc,   =  [], []
+    # initialize tracker for minimum validation loss
+
+    
+    for epoch in range(n_epochs):
+        train_loss, valid_loss = 0, 0 # monitor losses
+        class_correct_train ,class_total_train = 0, 0 
+        class_correct_valid ,class_total_valid = 0, 0 
+        
+
+        # train the model
+        model.train() # prep model for training
+        for data, label in train_loader:
+            data = data.to(device=device, dtype=torch.float32)
+            label = label.to(device=device, dtype=torch.long)
+            optimizer.zero_grad() # clear the gradients of all optimized variables
+            output = model(data) # forward pass: compute predicted outputs by passing inputs to the model
+            loss = criterion(output, label) # calculate the loss
+            loss.backward() # backward pass: compute gradient of the loss with respect to model parameters
+            optimizer.step() # perform a single optimization step (parameter update)
+            train_loss += loss.item() * data.size(0) # update running training loss
+
+            _, pred = torch.max(output, 1)
+            correct = np.squeeze(pred.eq(label.data.view_as(pred)))
+            for i in range(len(label)):
+                digit = label.data[i]
+                class_correct_train += correct[i].item()
+                class_total_train += 1
+        scheduler.step()
+
+
+
+
+
+
 def evaluation(model, test_loader, criterion): 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -121,6 +158,28 @@ def evaluation(model, test_loader, criterion):
 import torch.nn as nn
 import numpy
 from torch.autograd import Variable
+
+def get_sparsity(model):
+
+    L = []
+    for name1, module in model.named_modules():
+        if isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.Linear) :
+            L.append((module,'weight'))
+            txt1 = "Sparsity in {}t: {:.2f}%".format(name1,
+                100. * float(torch.sum(module.weight == 0))
+                / float(module.weight.nelement()))
+            print(txt1)
+
+    sum = 0
+    totals = 0
+    for tuple in L :
+        sum += torch.sum(tuple[0].weight == 0)
+        totals += tuple[0].weight.nelement()
+    txt = "Global sparsity: {:.2f}%".format(sum/totals * 100)
+    print(txt)
+    sp = sum/totals * 100
+    sp = sp.item()
+    return(str(sp))
 
 
 class BC():
@@ -670,8 +729,11 @@ def profile(model, input_size, custom_ops = {}):
 
     model.apply(remove_hooks)
     model.apply(add_hooks)
-
     x = torch.zeros(input_size)
+
+    if torch.cuda.is_available():
+        x = torch.zeros(input_size).cuda()
+
     model(x)
 
     total_ops = 0
@@ -683,7 +745,7 @@ def profile(model, input_size, custom_ops = {}):
 
     return total_ops, total_params
 
-def score(model , quantization = False):
+def score(model , quantization = False) :
     ref_params = 5586981
     ref_flops  = 834362880
     '''if(pruning):
@@ -697,8 +759,10 @@ def score(model , quantization = False):
         model.load_state_dict(loaded_cpt)
         evaluation(model, testloader, criterion)
     '''   
+
     flops, _ = profile(model, (1,3,32,32))
     flops = flops.item()
+    
     
     params = 0
     if(quantization):

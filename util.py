@@ -165,7 +165,7 @@ def get_sparsity(model):
     for name1, module in model.named_modules():
         if isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.Linear) :
             L.append((module,'weight'))
-            txt1 = "Sparsity in {}t: {:.2f}%".format(name1,
+            txt1 = "Sparsity in {}: {:.2f}%".format(name1,
                 100. * float(torch.sum(module.weight == 0))
                 / float(module.weight.nelement()))
             print(txt1)
@@ -173,12 +173,11 @@ def get_sparsity(model):
     sum = 0
     totals = 0
     for tuple in L :
-        sum += torch.sum(tuple[0].weight == 0)
+        sum += torch.sum(tuple[0].weight == 0).item()
         totals += tuple[0].weight.nelement()
     txt = "Global sparsity: {:.2f}%".format(sum/totals * 100)
     print(txt)
     sp = sum/totals * 100
-    sp = sp.item()
     return(str(sp))
 
 
